@@ -1,6 +1,7 @@
 Lufus: The Linux USB Formatting Utility
 ==========================================
 The same [Rufus](https://github.com/pbatard/rufus/), but ported to Linux.
+
 ![Rufus logo](https://raw.githubusercontent.com/pbatard/rufus/master/res/icons/rufus-128.png)
 
 Lufus is a utility that helps format and create bootable USB flash drives, but on Linux now!
