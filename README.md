@@ -46,8 +46,6 @@ download and use the *freely available* [Visual Studio Community Edition](https:
 to build, run or develop for Lufus. As per the Visual Studio Community Edition license,
 this applies regardless of whether you are an individual or a corporate user.
 
-Additional information
-----------------------
 Enhancements/Bugs
 -----------------
 
