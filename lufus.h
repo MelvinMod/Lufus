@@ -496,7 +496,7 @@ extern int GenerateWindowsConfig(linux_profile* profile, transfer_options* opts,
 extern int CreateWindowsRegistry(linux_profile* profile, transfer_options* opts, const char* output_file);
 extern int CreatePowerShellScript(linux_profile* profile, transfer_options* opts, const char* output_file);
 extern int CreateBatchScript(linux_profile* profile, transfer_options* opts, const char* output_file);
-extern int TransferSettingsToISO(const char* iso_path, const char* settings_dir);
+extern int CreateWindowsToGoWim(const char* source_wim, const char* dest_drive);
 
 extern int HashFile(unsigned type, const char* path, uint8_t* sum);
 extern int HashBuffer(unsigned type, const uint8_t* buf, const size_t len, uint8_t* sum);

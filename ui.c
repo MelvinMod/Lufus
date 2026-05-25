@@ -4,6 +4,7 @@
 #include "ddwrite.h"
 #include "wim.h"
 #include "linux2win.h"
+#include "bootloader.h"
 #include <cairo.h>
 
 GtkWidget* hMainDialog = NULL;
@@ -58,6 +59,15 @@ static GtkWidget* hLinux2WinGit = NULL;
 static GtkWidget* hLinux2WinBash = NULL;
 static GtkWidget* hLinux2WinTerminal = NULL;
 static GtkWidget* hLinux2WinBox = NULL;
+static GtkWidget* hBootMode = NULL;
+static GtkWidget* hCheckWindowsToGo = NULL;
+static GtkWidget* hCheckPersistent = NULL;
+static GtkWidget* hPersistentSize = NULL;
+static GtkWidget* hCheckValidateUEFI = NULL;
+static GtkWidget* hCheckComputeHash = NULL;
+static GtkWidget* hHashType = NULL;
+static GtkWidget* hCheckFakeDrive = NULL;
+static GtkWidget* hBootOptionsBox = NULL;
 
 static GtkTextBuffer* log_buffer = NULL;
 static volatile int log_size = 0;
@@ -413,6 +423,8 @@ void EnableControls(int enable, int remove_checkboxes)
         gtk_widget_set_sensitive(hDDOptionsBox, enable);
     if (hLinux2WinBox)
         gtk_widget_set_sensitive(hLinux2WinBox, enable);
+    if (hBootOptionsBox)
+        gtk_widget_set_sensitive(hBootOptionsBox, enable);
 }
 
 void InitProgress(int bOnlyFormat)
@@ -469,9 +481,11 @@ static void on_start(GtkWidget* widget, gpointer data)
     const char* path = gtk_entry_get_text(GTK_ENTRY(hBootSelection));
     int device_index = gtk_combo_box_get_active(GTK_COMBO_BOX(hDeviceList));
     int write_mode_idx = gtk_combo_box_get_active(GTK_COMBO_BOX(hWriteMode));
+    int boot_mode = gtk_combo_box_get_active(GTK_COMBO_BOX(hBootMode));
     win_iso_info win_info;
     char temp_dir[PATH_MAX];
     pthread_t tid;
+    uint64_t persist_size = 0;
 
     if (!path || strlen(path) == 0) {
         GtkWidget* dlg = gtk_message_dialog_new(GTK_WINDOW(hMainDialog),
@@ -506,6 +520,48 @@ static void on_start(GtkWidget* widget, gpointer data)
         }
     }
 
+    if (IsChecked(hCheckComputeHash)) {
+        uprintf("Computing hash...");
+        int hash_type = gtk_combo_box_get_active(GTK_COMBO_BOX(hHashType));
+        uint8_t hash[64];
+        int len = HashFile(hash_type == 3 ? HASH_SHA512 :
+                           hash_type == 2 ? HASH_SHA256 :
+                           hash_type == 1 ? HASH_SHA1 : HASH_MD5, path, hash);
+        if (len > 0) {
+            char hex[129] = {0};
+            for (int i = 0; i < len; i++)
+                snprintf(hex + i * 2, sizeof(hex) - i * 2, "%02x", hash[i]);
+            uprintf("Hash: %s", hex);
+        }
+    }
+
+    if (IsChecked(hCheckFakeDrive)) {
+        uprintf("Checking for fake flash drive...");
+        uint64_t reported_size = lufus_drive[device_index].size;
+        uint64_t actual_size = GetDriveSize(device_index);
+        if (actual_size > 0 && actual_size < reported_size * 0.9) {
+            GtkWidget* dlg = gtk_message_dialog_new(GTK_WINDOW(hMainDialog),
+                GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                "WARNING: Possible fake flash drive detected!\nReported: %s\nActual: %s",
+                SizeToHumanReadable(reported_size, 0, 0),
+                SizeToHumanReadable(actual_size, 0, 0));
+            gtk_dialog_run(GTK_DIALOG(dlg));
+            gtk_widget_destroy(dlg);
+        } else {
+            uprintf("Flash drive integrity: OK");
+        }
+    }
+
+    if (IsChecked(hCheckValidateUEFI) && write_mode_idx == 0) {
+        if (!ValidateUEFIBoot(path)) {
+            GtkWidget* dlg = gtk_message_dialog_new(GTK_WINDOW(hMainDialog),
+                GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+                "WARNING: UEFI boot validation failed!\nMissing or invalid EFI boot files.");
+            gtk_dialog_run(GTK_DIALOG(dlg));
+            gtk_widget_destroy(dlg);
+        }
+    }
+
     GtkWidget* dlg = gtk_message_dialog_new(GTK_WINDOW(hMainDialog),
         GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_WARNING, GTK_BUTTONS_YES_NO,
         "WARNING: All data on /dev/%s will be destroyed.\nAre you sure?",
@@ -525,6 +581,31 @@ static void on_start(GtkWidget* widget, gpointer data)
     if (write_mode_idx == 1) {
         image_path = safe_strdup(path);
         pthread_create(&tid, NULL, DDWriteThread, (void*)(uintptr_t)device_index);
+        pthread_detach(tid);
+        return;
+    }
+
+    if (IsChecked(hCheckPersistent)) {
+        persist_size = gtk_spin_button_get_value(GTK_SPIN_BUTTON(hPersistentSize)) * MB;
+        uprintf("Creating persistent Linux partition (%s)", SizeToHumanReadable(persist_size, 0, 0));
+        pthread_create(&tid, NULL, (void *(*)(void *))CreatePersistentLinux,
+            (void*)(uintptr_t)device_index);
+        pthread_detach(tid);
+        return;
+    }
+
+    if (boot_mode == 4 || boot_mode == 5) {
+        uprintf("Installing %s", boot_mode == 4 ? "FreeDOS" : "MS-DOS 6.22");
+        pthread_create(&tid, NULL, (void *(*)(void *))InstallFreeDOS,
+            (void*)(uintptr_t)device_index);
+        pthread_detach(tid);
+        return;
+    }
+
+    if (IsChecked(hCheckWindowsToGo)) {
+        uprintf("Creating Windows To Go drive");
+        pthread_create(&tid, NULL, (void *(*)(void *))CreateWindowsToGo,
+            (void*)(uintptr_t)device_index);
         pthread_detach(tid);
         return;
     }
@@ -788,6 +869,58 @@ static void create_main_dialog(void)
     hLinux2WinTerminal = gtk_check_button_new_with_label("Export terminal config");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(hLinux2WinTerminal), TRUE);
     gtk_box_pack_start(GTK_BOX(hbox), hLinux2WinTerminal, FALSE, FALSE, 0);
+
+    hBootOptionsBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_box_pack_start(GTK_BOX(vbox), hBootOptionsBox, FALSE, FALSE, 0);
+
+    label = gtk_label_new("Boot options:");
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), label, FALSE, FALSE, 0);
+
+    hBootMode = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "Non-bootable");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "BIOS only");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "UEFI only");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "BIOS + UEFI");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "FreeDOS");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hBootMode), "MS-DOS 6.22");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(hBootMode), 3);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hBootMode, FALSE, FALSE, 0);
+
+    hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hbox, FALSE, FALSE, 0);
+
+    hCheckWindowsToGo = gtk_check_button_new_with_label("Create Windows To Go");
+    gtk_box_pack_start(GTK_BOX(hbox), hCheckWindowsToGo, FALSE, FALSE, 0);
+
+    hCheckPersistent = gtk_check_button_new_with_label("Create persistent partition");
+    gtk_box_pack_start(GTK_BOX(hbox), hCheckPersistent, FALSE, FALSE, 0);
+
+    hPersistentSize = gtk_spin_button_new_with_range(128.0, 8192.0, 512.0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(hPersistentSize), 1024.0);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hPersistentSize, FALSE, FALSE, 0);
+
+    hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hbox, FALSE, FALSE, 0);
+
+    hCheckValidateUEFI = gtk_check_button_new_with_label("Validate UEFI boot");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(hCheckValidateUEFI), TRUE);
+    gtk_box_pack_start(GTK_BOX(hbox), hCheckValidateUEFI, FALSE, FALSE, 0);
+
+    hCheckComputeHash = gtk_check_button_new_with_label("Compute image hash");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(hCheckComputeHash), TRUE);
+    gtk_box_pack_start(GTK_BOX(hbox), hCheckComputeHash, FALSE, FALSE, 0);
+
+    hHashType = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hHashType), "MD5");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hHashType), "SHA-1");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hHashType), "SHA-256");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(hHashType), "SHA-512");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(hHashType), 2);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hHashType, FALSE, FALSE, 0);
+
+    hCheckFakeDrive = gtk_check_button_new_with_label("Detect fake flash drives");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(hCheckFakeDrive), TRUE);
+    gtk_box_pack_start(GTK_BOX(hBootOptionsBox), hCheckFakeDrive, FALSE, FALSE, 0);
 
     hWindowsOptionsBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     gtk_box_pack_start(GTK_BOX(vbox), hWindowsOptionsBox, FALSE, FALSE, 0);
