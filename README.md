@@ -9,6 +9,8 @@ Lufus is a utility that helps format and create bootable USB flash drives, but o
 Features
 --------
 
+![Lufus Screenshot (i3wm)](https://github.com/MelvinMod/Lufus/blob/main/Lufus_screenshot.png)
+
 * Format USB, flash card and virtual drives to FAT/FAT32/NTFS/UDF/exFAT/ReFS/ext2/ext3 (and more)
 * [DD](https://github.com/coreutils/coreutils/blob/master/src/dd.c) writing method
 * Create DOS bootable USB drives using [FreeDOS](https://www.freedos.org) or MS-DOS
